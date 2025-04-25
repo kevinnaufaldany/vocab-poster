@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PinVocab</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(to bottom, #F7FAFC, #DBEAFE);
+    }
+    .vocab-item {
+      animation: fadeIn 0.5s ease-in;
+    }
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    .canvas-preview {
+      border: 2px dashed #E5E7EB;
+      background: #FFFFFF;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      max-width: 595px;
+      aspect-ratio: 595 / 842;
+      overflow-y: auto;
+      padding: 24px; /* Margin dalam canvas preview */
+    }
+    #a4-poster {
+      position: absolute;
+      left: -9999px;
+      top: -9999px;
+      width: 595px; /* A4 width at 72 DPI */
+      height: 842px; /* A4 height at 72 DPI */
+      background: white;
+      padding: 60px; /* Margin dalam poster A4 saat download */
+      font-family: 'Inter', sans-serif;
+      position: relative;
+    }
+    #a4-preview {
+      width: 100%;
+      max-width: 595px;
+      aspect-ratio: 595 / 842;
+      background: white;
+      padding: 30px; /* Margin dalam preview A4 */
+      margin-top: 20px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      font-family: 'Inter', sans-serif;
+    }
+    .suggestions-container {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: white;
+      border: 1px solid #E5E7EB;
+      border-radius: 0.5rem;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      z-index: 10;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .suggestion-item {
+      padding: 0.5rem 1rem;
+      cursor: pointer;
+    }
+    .suggestion-item:hover {
+      background-color: #F3F4F6;
+    }
+    .vocab-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+    .vocab-row .english {
+      flex: 1;
+      text-align: left;
+    }
+    .vocab-row .equals {
+      flex: 0;
+      text-align: center;
+    }
+    .vocab-row .indonesian {
+      flex: 1;
+      text-align: right;
+    }
+    .watermark {
+      position: absolute;
+      top: -45px;
+      left: -30px;
+      opacity: 0.3;
+      font-size: 1rem;
+      color: #1E2A5E;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <div id="a4-poster"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+    const ReactDOM = window.ReactDOM;
+
+    function App() {
+      const [english, setEnglish] = useState('');
+      const [indonesian, setIndonesian] = useState('');
+      const [suggestions, setSuggestions] = useState([]);
+      const [showSuggestions, setShowSuggestions] = useState(false);
+      const [vocabList, setVocabList] = useState(() => {
+        const saved = localStorage.getItem('vocabList');
+        return saved ? JSON.parse(saved) : [];
+      });
+      const [showPreview, setShowPreview] = useState(false);
+      const [draggedIndex, setDraggedIndex] = useState(null);
+
+      const MAX_VOCABS = 18;
+
+      useEffect(() => {
+        localStorage.setItem('vocabList', JSON.stringify(vocabList));
+      }, [vocabList]);
+
+      // Fetch suggestions from backend
+      const fetchSuggestions = async (value) => {
+        if (value.length < 2) {
+          setSuggestions([]);
+          setShowSuggestions(false);
+          return;
+        }
+        try {
+          const response = await fetch(`http://localhost:8080/suggest?prefix=${value}`);
+          const data = await response.json();
+          setSuggestions(data.suggestions || []);
+          setShowSuggestions(true);
+        } catch (error) {
+          console.error('Error fetching suggestions:', error);
+        }
+      };
+
+      // Fetch translation when English word changes
+      const fetchTranslation = async (word) => {
+        if (!word) return;
+        try {
+          const response = await fetch(`http://localhost:8080/translate?word=${word}`);
+          const data = await response.json();
+          setIndonesian(data.translation || '');
+        } catch (error) {
+          console.error('Error fetching translation:', error);
+        }
+      };
+
+      // Fetch random word
+      const fetchRandomWord = async () => {
+        try {
+          const response = await fetch(`http://localhost:8080/random`);
+          const data = await response.json();
+          const randomWord = data.word || '';
+          setEnglish(randomWord);
+          fetchTranslation(randomWord);
+        } catch (error) {
+          console.error('Error fetching random word:', error);
+        }
+      };
+
+      // Handle English input change
+      const handleEnglishChange = (e) => {
+        const value = e.target.value;
+        setEnglish(value);
+        fetchSuggestions(value);
+      };
+
+      // Handle suggestion selection
+      const handleSuggestionSelect = (suggestion) => {
+        setEnglish(suggestion);
+        fetchTranslation(suggestion);
+        setShowSuggestions(false);
+      };
+
+      // Handle input blur
+      const handleInputBlur = () => {
+        setTimeout(() => setShowSuggestions(false), 200);
+      };
+
+      // Handle form submission
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (english && indonesian && vocabList.length < MAX_VOCABS) {
+          setVocabList([...vocabList, { english, indonesian }]);
+          setEnglish('');
+          setIndonesian('');
+          setSuggestions([]);
+          setShowSuggestions(false);
+        }
+      };
+
+      // Handle delete vocab
+      const handleDelete = (index) => {
+        setVocabList(vocabList.filter((_, i) => i !== index));
+      };
+
+      // Handle preview toggle
+      const handlePreview = () => {
+        setShowPreview(!showPreview);
+      };
+
+      // Drag-and-drop handlers
+      const handleDragStart = (index) => {
+        setDraggedIndex(index);
+      };
+
+      const handleDragOver = (e, index) => {
+        e.preventDefault();
+      };
+
+      const handleDrop = (index) => {
+        if (draggedIndex === null || draggedIndex === index) return;
+
+        const newVocabList = [...vocabList];
+        const [draggedItem] = newVocabList.splice(draggedIndex, 1);
+        newVocabList.splice(index, 0, draggedItem);
+        setVocabList(newVocabList);
+        setDraggedIndex(null);
+      };
+
+      // Handle download poster
+      const handleDownload = () => {
+        // Render A4 poster
+        const a4Poster = document.getElementById('a4-poster');
+        ReactDOM.render(
+          <div className="flex flex-col h-full relative">
+            {vocabList.length === 0 ? (
+              <p className="text-gray-500 text-center text-xl">No vocabulary added yet.</p>
+            ) : (
+              <ul className="list-none space-y-4">
+                {vocabList.slice(0, MAX_VOCABS).map((vocab, index) => (
+                  <li key={index} className="vocab-row text-xl text-gray-600">
+                    <span className="english">{vocab.english}</span>
+                    <span className="equals">=</span>
+                    <span className="indonesian">{vocab.indonesian}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="watermark">PinVocab</div>
+          </div>,
+          a4Poster
+        );
+
+        // Download the A4 poster
+        html2canvas(a4Poster).then(canvas => {
+          const link = document.createElement('a');
+          link.download = 'vocabulary-poster-a4.png';
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+        });
+      };
+
+      return (
+        <div className="min-h-screen flex flex-col">
+          {/* Header */}
+          <header className="p-6">
+            <h1 className="text-3xl font-bold text-[#1E2A5E]">PinVocab</h1>
+          </header>
+          {/* Main Content */}
+          <main className="flex-grow flex flex-col md:flex-row gap-8 md:gap-16 p-8 md:p-16 justify-center">
+            {/* Left Side: Form */}
+            <div className="w-full md:w-1/3 flex flex-col gap-6 max-w-md">
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="InputVocabInggris"
+                  value={english}
+                  onChange={handleEnglishChange}
+                  onBlur={handleInputBlur}
+                  className="w-full p-3 border border-gray-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400"
+                />
+                {showSuggestions && suggestions.length > 0 && (
+                  <div className="suggestions-container">
+                    {suggestions.map((suggestion, index) => (
+                      <div
+                        key={index}
+                        className="suggestion-item"
+                        onMouseDown={() => handleSuggestionSelect(suggestion)}
+                      >
+                        {suggestion}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="text-center text-2xl font-bold text-gray-400">=</div>
+              <div>
+                <input
+                  type="text"
+                  value={indonesian}
+                  onChange={(e) => setIndonesian(e.target.value)}
+                  placeholder="InputTranslateIndonesia"
+                  className="w-full p-3 border border-gray-200 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400"
+                />
+              </div>
+              <div className="flex gap-4">
+                <button
+                  onClick={fetchRandomWord}
+                  className="flex-1 bg-gray-500 text-white px-6 py-3 rounded-lg shadow-md hover:bg-gray-600 transition"
+                >
+                  Get Random Word
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  className="flex-1 bg-blue-500 text-white px-6 py-3 rounded-lg shadow-md hover:bg-blue-600 transition"
+                  disabled={vocabList.length >= MAX_VOCABS}
+                >
+                  ADD
+                </button>
+              </div>
+            </div>
+            {/* Right Side: Poster Preview */}
+            <div className="w-full md:w-2/3 flex flex-col gap-4 max-w-lg">
+              <div className="flex justify-between items-center mb-2">
+                <p className="text-gray-600">
+                  {vocabList.length}/{MAX_VOCABS} vocab added
+                </p>
+                <div className="flex gap-4">
+                  <button
+                    onClick={handlePreview}
+                    className="bg-purple-500 text-white px-6 py-2 rounded-lg shadow-md hover:bg-purple-600 transition"
+                  >
+                    {showPreview ? 'Hide Preview' : 'Show Preview'}
+                  </button>
+                  <button
+                    onClick={handleDownload}
+                    className="bg-blue-500 text-white px-6 py-2 rounded-lg shadow-md hover:bg-blue-600 transition"
+                  >
+                    Download
+                  </button>
+                </div>
+              </div>
+              <div
+                id="poster-preview"
+                className="canvas-preview rounded-lg"
+              >
+                {vocabList.length === 0 ? (
+                  <p className="text-gray-500 text-center text-xl">No vocabulary added yet.</p>
+                ) : (
+                  <ul className="list-none space-y-4">
+                    {vocabList.slice(0, MAX_VOCABS).map((vocab, index) => (
+                      <li
+                        key={index}
+                        className="vocab-item vocab-row text-xl text-gray-600"
+                        draggable
+                        onDragStart={() => handleDragStart(index)}
+                        onDragOver={(e) => handleDragOver(e, index)}
+                        onDrop={() => handleDrop(index)}
+                      >
+                        <span className="english">{vocab.english}</span>
+                        <span className="equals">=</span>
+                        <span className="indonesian">{vocab.indonesian}</span>
+                        <button
+                          onClick={() => handleDelete(index)}
+                          className="text-red-500 hover:text-red-600 transition ml-4"
+                        >
+                          Delete
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              {showPreview && (
+                <div id="a4-preview">
+                  {vocabList.length === 0 ? (
+                    <p className="text-gray-500 text-center text-lg">No vocabulary added yet.</p>
+                  ) : (
+                    <ul className="list-none space-y-3">
+                      {vocabList.slice(0, MAX_VOCABS).map((vocab, index) => (
+                        <li key={index} className="vocab-row text-lg text-gray-600">
+                          <span className="english">{vocab.english}</span>
+                          <span className="equals">=</span>
+                          <span className="indonesian">{vocab.indonesian}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          </main>
+        </div>
+      );
+    }
+
+    // Use createRoot instead of ReactDOM.render
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
